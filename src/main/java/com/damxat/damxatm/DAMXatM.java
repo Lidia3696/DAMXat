@@ -6,6 +6,7 @@ public class DAMXatM {
     
     //nvegar a carpeta
     //cd "/cygdrive/e/p serveis/DAMXat/DAMXatM/src/main/java/com/damxat/damxatm"
+    //cd "src/main/java/com/damxat/damxatm"
     
     //compliar tot
     //javac -d out DAMXatM.java ServidorXat.java ClientXat.java
@@ -22,8 +23,8 @@ public class DAMXatM {
             System.out.println("----Chat----");
             System.out.println();
             System.out.println("Selecciona el mode:");
-            System.out.println("  1 - Servidor");
-            System.out.println("  2 - Client");
+            System.out.println("1 - Servidor");
+            System.out.println("2 - Client");
             System.out.print("Opció: ");
 
             String opcio = sc.nextLine().trim();
@@ -38,7 +39,7 @@ public class DAMXatM {
                     //si esta vacio selecciona el 5000, si no, parsea el string a int
                     int port = portStr.isEmpty() ? 5000 : Integer.parseInt(portStr);
 
-                    //inicia servidor
+                    //inicia servidor (llama a laclase)
                     ServidorXat servidor = new ServidorXat(port);
                     servidor.start();
                     break;
@@ -57,15 +58,22 @@ public class DAMXatM {
 
                     ClientXat client = new ClientXat(host, portClient);
                     client.start();
+                    
+                    try {
+                        //esperar a que el hilo cliente termine
+                        client.join();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    
                     break;
 
                 default:
                     System.out.println("Opció no vàlida. Torna a intentar.");
 
             }
-        } while (!continuar);
+        } while (continuar);
 
-        sc.close();
     }
 
 }

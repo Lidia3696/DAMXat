@@ -29,13 +29,17 @@ public class ClientXat extends Thread {
             //indica la peticion de conexion
             this.socket = new Socket(this.host, this.puerto);
             System.out.println("[Client] Connectat al servidor " + this.host + ":" + this.puerto);
+            
 
             // crea los br y bw para poder escribir y recibir mensajes
             //los streams son para enviar y recibir datos, solo incluye una palabra, los buffered es para leer varias palabras
             this.br = new BufferedReader(new InputStreamReader(this.socket.getInputStream()));
             this.bw = new BufferedWriter(new OutputStreamWriter(this.socket.getOutputStream()));
+            
+            //selecciona nick
+            if (!seleccionaNick()) return;
 
-            // Hilo receptor de mensajes del servidor
+            // HILO SECUNDARIO hilo receptor de mensajes del servidor
             Thread receptor = new Thread(() -> recibeMensajes());
             //un daemon es un hilo que muere cuando los hilos principales mueren, son join() ni cosas dde esas
             //jvm solo termina cuando los hilos principales han terminado
@@ -45,7 +49,11 @@ public class ClientXat extends Thread {
             //hay que hacerlo daemon antes de inicializarlo
             receptor.start();
 
-            //enviar mensajes
+            //System.out.print("Introdueix el teu nick:");
+            //seleccionaNick();
+            
+            //HILO PRINCIPAL enviar mensajes
+            //se va repitiendo porque dentro de esa funcion hay un while
             enviarMensaje();
 
         } catch (IOException e) {
@@ -53,29 +61,6 @@ public class ClientXat extends Thread {
         }
     }
 
-    //no le veo el sentido a esto
-    private void recibeMensajes() {
-        String mensaje;
-        try {
-            //mientras la linea tenga algo escrito
-            while ((mensaje = this.br.readLine()) != null) {
-                //si es adeu o exit
-                if (mensaje.equalsIgnoreCase("adeu") || mensaje.equalsIgnoreCase("exit")) {
-                    //desconecta el server
-                    System.out.println("[Servidor] " + mensaje);
-                    System.out.println("[Client] Servidor desconnectat.");
-                    //cierra todo llamandp a la funcion y termina el programa
-                    cerrar();
-                    System.exit(0);
-                }
-                //si no se ha cerrado, envia mensaje
-                System.out.println("[Servidor] " + mensaje);
-            }
-        } catch (IOException e) {
-            //si hay error se cierra el server
-            System.out.println("[Client] Connexió tancada.");
-        }
-    }
 
     private void enviarMensaje() {
         BufferedReader teclado = new BufferedReader(new InputStreamReader(System.in));
@@ -98,6 +83,79 @@ public class ClientXat extends Thread {
             }
         } catch (IOException e) {
             System.out.println("[Client] Error llegint del teclat.");
+            System.out.println(e.getStackTrace());
+            System.out.println(e.getMessage());
+        }
+    }
+    
+    //revisar esto
+    private void recibeMensajes() {
+        String mensaje;
+        try {
+            //mientras la linea tenga algo escrito
+            while ((mensaje = this.br.readLine()) != null) {
+                //si es adeu o exit
+                if (mensaje.equalsIgnoreCase("adeu") || mensaje.equalsIgnoreCase("exit")) {
+                    //desconecta el server
+                    System.out.println("[Servidor] " + mensaje);
+                    System.out.println("[Client] Servidor desconnectat.");
+                    //cierra todo llamandp a la funcion y termina el programa
+                    cerrar();
+                    System.exit(0);
+                }
+                //si no se ha cerrado, envia mensaje
+                System.out.println(mensaje);
+            }
+        } catch (IOException e) {
+            //si hay error se cierra el server
+            System.out.println("[Client] Connexió tancada.");
+        }
+    }
+
+    public boolean seleccionaNick() {
+        //abbre br 
+        BufferedReader teclado = new BufferedReader(new InputStreamReader(System.in));
+        try {
+            
+            String nick = "";
+            while (true) {
+                
+                System.out.print("Introdueix el teu nick: ");
+                nick = teclado.readLine();
+                
+                if (nick == null || nick.isBlank()) {
+                    System.out.println("El nick no pot estar buit.");
+                    continue;
+                }
+                
+                //envia nick al server, es como enviar un mensaje
+                this.bw.write(nick);
+                this.bw.newLine();
+                this.bw.flush();
+
+                //espera respuesta del servidor
+                String resposta = this.br.readLine();
+                
+                if ("NICK_OK".equals(resposta)) {
+                    
+                    System.out.println("Benvingut, " + nick + "!");
+                    this.nick = nick;
+                    return true;
+                    
+                } else if ("NICK_REPETIT".equals(resposta)) {
+                    
+                    System.out.println("Aquest nick ja està en ús. Tria'n un altre.");
+                    
+                } else {
+                    
+                    System.out.println("Error del servidor: " + resposta);
+                    return false;
+                    
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("[Client] Error seleccionant nick.");
+            return false;
         }
     }
 
