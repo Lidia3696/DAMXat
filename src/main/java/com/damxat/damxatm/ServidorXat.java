@@ -21,15 +21,16 @@ public class ServidorXat extends Thread {
     private InputStream in;
     private InputStreamReader inr;
     private BufferedReader br;
-    private BufferedWriter bw;
-    private OutputStream out;
-    private OutputStreamWriter outw;
     private int puerto;
+    
+   
+    
 
     //nicks de clientes
     //static para compartirlo entre conexiones
     private static final HashMap<String, PrintWriter> usersHashMap = new HashMap<>();
     private String nickClient;
+    private Object mapaUsuarios;
 
     public ServidorXat(int puerto) {
         this.puerto = puerto;
@@ -76,9 +77,6 @@ public class ServidorXat extends Thread {
             this.in = this.socket.getInputStream();
             this.inr = new InputStreamReader(in);
             this.br = new BufferedReader(inr);
-            this.out = this.socket.getOutputStream();
-            this.outw = new OutputStreamWriter(out);
-            this.bw = new BufferedWriter(outw);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -88,30 +86,36 @@ public class ServidorXat extends Thread {
         try {
             //esto lee lo que le llega
             String nick = this.br.readLine();
+            if (nick != null) nick = nick.trim();
 
             // COMPROBACIONES
             //comproacion si esta vacio
             if (nick == null || nick.isBlank()) {
-                enviaTxt("Nick invàlid. Connexió tancada.");
+                //crear pw temporal para escribir mensaje de error
+                PrintWriter pwTemp = new PrintWriter(this.socket.getOutputStream(), true);
+                pwTemp.println("Nick invàlid. Connexió tancada.");
                 return false;
             }
+            
+            //pillar pw del hashmap
+            synchronized (usersHashMap) {
+                if (usersHashMap.containsKey(nick)) {
+                    PrintWriter pwTemp = new PrintWriter(this.socket.getOutputStream(), true);
+                    pwTemp.println("NICK_REPETIT");
 
-            //comprobacion que no este repeteido
-            if (usersHashMap.containsKey(nick)) {
-                enviaTxt("NICK_REPETIT");
-                return false;
+                    return false;
+                }
+
+                //asignar nueo nick al nick de la clase
+                this.nickClient = nick;
+                //un printwriter sirve para imprimit texto con formato
+                //aqui se crea pasandole el outputstream con autoflush en true
+                //PrintWriter(OutputStream out, boolean autoFlush) 	Creates a new PrintWriter from an existing OutputStream.
+                PrintWriter pw = new PrintWriter(this.socket.getOutputStream(), true);
+                
+                //añadir el nick yel printiriter al hasmap del servidor, como es static se escribe tal cual
+                usersHashMap.put(nick, pw);
             }
-
-            //asignar nueo nick al nick de la clase
-            this.nickClient = nick;
-
-            //un printwriter sirve para imprimit texto con formato
-            //aqui se crea pasandole el outputstream con autoflush en true
-            //PrintWriter(OutputStream out, boolean autoFlush) 	Creates a new PrintWriter from an existing OutputStream.
-            PrintWriter pw = new PrintWriter(this.out, true);
-
-            //añadir el nick yel printiriter al hasmap del servidor, como es static se escribe tal cual
-            usersHashMap.put(nick, pw);
 
             System.out.println("[Servidor] Nou usuari registrat amb nick " + nick);
 
@@ -146,38 +150,17 @@ public class ServidorXat extends Thread {
 
     }
 
-    //funcion que recoje el texto del teclado
-    //luego llama a enviatxt que comprueba que se haya enviado bien
-    void enviarMensaje(String prefix) {
-        BufferedReader teclado = new BufferedReader(new InputStreamReader(System.in));
-        String linea;
-        System.out.println("Escriu els teus missatges (escriu 'adeu' per sortir):");
-        try {
-            while ((linea = teclado.readLine()) != null) {
-                enviaTxt(linea);
-                if (linea.equalsIgnoreCase("adeu") || linea.equalsIgnoreCase("exit")) {
-                    cerrar();
-                    System.exit(0);
-                }
-            }
-        } catch (IOException e) {
-            System.out.println("[Servidor] Error llegint del teclat.");
-        }
-    }
 
     //el bool es para comprobar que se ha enviado bien, por eso esta dentro de un try y el catch devuelve false
     public boolean enviaTxt(String mensaje) {
-        if (this.socket == null || !this.socket.isConnected()) {
-            return false;
-        }
+        if (this.socket == null || !this.socket.isConnected()) return false;
         try {
-            //escribe el mensaje en el buffered writer (output)
-            this.bw.write(mensaje);
-            this.bw.newLine();
-            this.bw.flush();
+            PrintWriter pw = usersHashMap.get(this.nickClient);
+            if (pw != null) {
+                pw.println(mensaje);
+            }
             return true;
-        } catch (IOException e) {
-            e.printStackTrace();
+        } catch (Exception e) {
             return false;
         }
     }
@@ -186,22 +169,102 @@ public class ServidorXat extends Thread {
     void recibeMensajes() {
         String mensaje;
         try {
-            while ((mensaje = this.br.readLine()) != null) {
-                if (mensaje.equalsIgnoreCase("adeu") || mensaje.equalsIgnoreCase("exit")) {
+            //leeMOS líneas enviadas por el cliente mientras la conexión esté abierta
+            while ((mensaje = this.br.readLine()) != null) {   
+                
+                //para evitar enviar espacios o \r
+                mensaje = mensaje.trim();
+                
+                if (mensaje.isEmpty()) continue;
+                                
+                // ***** SORTIR ***** (Desconnexió)
+                // Comprobamos si el mensaje es el comando oficial /sortir o las alternativas adeu/exit
+                if (mensaje.equalsIgnoreCase("/sortir") || mensaje.equalsIgnoreCase("adeu") || mensaje.equalsIgnoreCase("exit")) {                 
                     System.out.println("L'usuari " + nickClient + " s'ha desconnectat.");
-                    enviarMensajeATodos("[Servidor] L'usuari " + nickClient + " ha sortit del xat.", null);
-                    //eliina el nich del hshmp
-                    eliminarUsuario();
+                    
+                    // Notificamos a TODOS los demás usuarios (el segundo parámetro es null para que NO se excluya a nadie si es necesario, 
+                    // aunque el cliente que se va ya está cerrando su lectura).
+                    enviarMensajeATodos("[SERVIDOR]: L'usuari " + nickClient + " ha abandonat el xat.", nickClient);
+                    
+                    // Eliminamos al usuario del HashMap estático para liberar el Nick
+                    eliminarUsuario();    
+                    // Salimos del bucle while para que el hilo de este cliente finalice
+                    break; 
                 }
+
+                // ***** LLISTA *****
+                // Si el mensaje recibido es exactamente /llista
+                if (mensaje.equalsIgnoreCase("/llista")) {
+                    //Tenemos un bloque sincronizado para evitar errores si otro usuario se conecta/desconecta justo ahora
+                    synchronized (usersHashMap) {
+                        
+                        // Creamos un String uniendo todas las llaves (Nicks) del HashMap separadas por coma
+                        String listaUsuarios = String.join(", ", usersHashMap.keySet());
+                        
+                        // Obtenemos el PrintWriter específico de este cliente para responderle SOLO a él
+                        PrintWriter pw = usersHashMap.get(nickClient);
+                        
+                        if (pw != null) {
+                            // Enviamos la lista formateada según el requisito
+                            pw.println("[SERVIDOR]: Usuaris connectats actualment: " + listaUsuarios);
+                        }
+                    }
+                    //usamos continue para saltar el código de abajo y NO enviar esto como chat global
+                    continue; 
+                }
+
+                //***** PRIVAT ***** /privat <UsuariDesti> <Missatge> 
+                // Verificamos si el mensaje empieza por el comando /privat seguido de un espacio
+                if (mensaje.startsWith("/privat ")) {
+                    // Dividimos el String en máximo 3 partes: "/privat", destino, el resto del mensaje
+                    String[] partes = mensaje.split(" ", 3); 
+                    
+                    // Verificamos que al menos tengamos las 3 partes necesarias
+                    if (partes.length >= 3) {
+                        String destino = partes[1].trim(); // El Nick del destinatario
+                        String contenido = partes[2]; // El contenido del mensaje privado
+                        
+                        synchronized (usersHashMap) {
+                            // Buscamos si el destinatario existe en nuestro "directorio" (HashMap)
+                            PrintWriter pwDestino = usersHashMap.get(destino);
+                            PrintWriter pwOrigen  = usersHashMap.get(nickClient);
+
+                            
+                            if (pwDestino != null) {
+                                // Si existe, le escribimos el mensaje con el formato del protocolo
+                                pwDestino.println("[Privat de " + nickClient + "]: " + contenido);
+                                //confirmar que se envió
+                                if (pwOrigen != null) {
+                                    pwOrigen.println("[Privat a " + destino + "]: " + contenido);
+                                }
+                            } else {
+                                // Si NO existe, informamos al emisor del error usando su propio PrintWriter
+                                if (pwOrigen != null) {
+                                    pwOrigen.println("[SERVIDOR]: Error: L'usuari '" + destino + "' no existeix.");
+                                }                           
+                            }
+                        }
+                    } else {
+                        // Si el usuario escribió mal el comando ej: privat Maria, le damos una ayuda
+                        usersHashMap.get(nickClient).println("[SERVIDOR]: Ús incorrecte: /privat <usuari> <missatge>");
+                    }
+                    
+                    continue; 
+                }
+
+                // Si el mensaje no empezó por "/", se trata como un texto normal para todos
+                // Mostramos en la consola del servidor quién escribió qué
                 System.out.println("[" + nickClient + "] " + mensaje);
-                enviarMensajeATodos("[" + nickClient + "] " + mensaje, nickClient);
+                
+                // Reenviamos el mensaje a todos los conectados con el formato solicitado: [<NomUsuari>]: <Missatge>
+                // Enviamos null en el segundo parámetro para que el propio emisor también vea su mensaje en el chat
+                enviarMensajeATodos("[" + nickClient + "]: " + mensaje, null); 
             }
-        } catch (IOException e) {
-            System.out.println("[Servidor] Connexió tancada.");
+        } catch (IOException e) {    
+            System.out.println("[Servidor] Connexió tancada per error de " + nickClient);
             eliminarUsuario();
         }
     }
-
     void eliminarUsuario() {
         if (nickClient != null) {
             synchronized (usersHashMap) {
@@ -227,5 +290,9 @@ public class ServidorXat extends Thread {
         if (this.serverSocket != null) {
             this.serverSocket.close();
         }
+    }
+
+    private void enviarMensajePrivado(String nickClient, String string) {
+        throw new UnsupportedOperationException("Not supported yet."); 
     }
 }
